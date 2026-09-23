@@ -1,0 +1,119 @@
+#!/usr/bin/env pybricks-micropython
+"""
+====================================================================
+ SEGUIDOR DE LINHA - SEM sensor lateral (3 sensores) - EV3
+====================================================================
+
+Pista: PRETA, com a linha do percurso em BRANCO.
+  -> leitura ALTA  (> LIMIAR_LINHA) = sensor está sobre a linha (branco)
+  -> leitura BAIXA (< LIMIAR_LINHA) = sensor está sobre a pista (preto)
+
+Sensores usados (SEM o de marcação):
+  - CENTRAL (mais à frente dos outros): responsável por seguir a
+    linha branca. Enquanto ele estiver "vendo" a linha, o robô segue
+    reto.
+  - CENTRO-ESQUERDA e CENTRO-DIREITA: ficam de olho se o robô está
+    saindo da linha. Se um deles passar a ver branco, é sinal de que
+    o robô está desviando para aquele lado, então o robô corrige
+    girando para o lado oposto.
+
+Sem sensor de marcação -> este programa NÃO conta marcações nem para
+sozinho ao final da pista. Ele roda até:
+  a) perder a linha completamente (nenhum dos 3 sensores vê branco), ou
+  b) o botão CENTRAL do EV3 ser pressionado.
+
+Portas (ajuste conforme sua fiação real no EV3):
+  Motor esquerdo      -> Porta A
+  Motor direito        -> Porta B
+  Sensor central        -> Porta S1  (mais à frente, segue a linha)
+  Sensor centro-esquerda -> Porta S2  (correção)
+  Sensor centro-direita  -> Porta S3  (correção)
+"""
+
+from pybricks.hubs import EV3Brick
+from pybricks.ev3devices import Motor, ColorSensor
+from pybricks.parameters import Port, Direction, Button
+from pybricks.tools import wait
+
+# --------------------------------------------------------------
+# CONFIGURACAO DE HARDWARE
+# --------------------------------------------------------------
+ev3 = EV3Brick()
+
+motor_esq = Motor(Port.A, Direction.CLOCKWISE)
+motor_dir = Motor(Port.B, Direction.CLOCKWISE)
+
+sensor_central = ColorSensor(Port.S1)
+sensor_esq = ColorSensor(Port.S2)
+sensor_dir = ColorSensor(Port.S3)
+
+# --------------------------------------------------------------
+# PARAMETROS AJUSTAVEIS
+# --------------------------------------------------------------
+VELOCIDADE_RETA = 350       # graus/s quando o central esta sobre a linha
+VELOCIDADE_CORRECAO = 200   # graus/s ao corrigir para um dos lados
+
+LIMIAR_LINHA = 60   # acima = branco (linha) / abaixo = preto (pista)
+
+ev3.screen.print("Pressione o botao central para comecar.")
+def esperar_botao_central():
+    
+    ev3.screen.clear()
+    while not (Button.CENTER in ev3.buttons.pressed()):
+        wait(10)
+    while Button.CENTER in ev3.buttons.pressed():
+        wait(10)
+
+
+def seguir_linha():
+    ev3.screen.clear()
+    ev3.screen.print("Seguindo linha")
+    print("Seguindo linha. Pressione o botao central para parar.")
+
+    while not (Button.CENTER in ev3.buttons.pressed()):
+        central = sensor_central.reflection()
+        esq = sensor_esq.reflection()
+        dir_ = sensor_dir.reflection()
+
+        central_na_linha = central > LIMIAR_LINHA
+        esq_na_linha = esq < LIMIAR_LINHA
+        dir_na_linha = dir_ < LIMIAR_LINHA
+
+        if central_na_linha and not esq_na_linha and not dir_na_linha:
+            # tudo certo: central sobre a linha, sem desvio -> anda reto
+            motor_esq.run(VELOCIDADE_RETA)
+            motor_dir.run(VELOCIDADE_RETA)
+
+        elif esq_na_linha:
+            # robo derivando para a esquerda (linha apareceu no sensor
+            # centro-esquerda) -> corrige girando para a direita
+            motor_esq.run(VELOCIDADE_CORRECAO)
+            motor_dir.run(0)
+
+        elif dir_na_linha:
+            # robo derivando para a direita -> corrige girando para a esquerda
+            motor_esq.run(0)
+            motor_dir.run(VELOCIDADE_CORRECAO)
+
+        elif central_na_linha:
+            # so o central ve a linha (caso normal sem desvio, redundante
+            # com a primeira condicao, mantido por seguranca)
+            motor_esq.run(VELOCIDADE_RETA)
+            motor_dir.run(VELOCIDADE_RETA)
+
+        
+
+        wait(5)
+
+    motor_esq.brake()
+    motor_dir.brake()
+    print("Parado pelo usuario.")
+
+
+def main():
+    esperar_botao_central()
+    seguir_linha()
+
+
+if __name__ == "__main__":
+    main()
