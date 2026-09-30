@@ -1,0 +1,466 @@
+#!/usr/bin/env pybricks-micropython
+from pybricks.hubs import EV3Brick
+from pybricks.ev3devices import (Motor, TouchSensor, ColorSensor,
+                                 InfraredSensor, UltrasonicSensor, GyroSensor)
+from pybricks.parameters import Port, Stop, Direction, Button, Color
+from pybricks.tools import wait, StopWatch, DataLog
+from pybricks.robotics import DriveBase
+from pybricks.media.ev3dev import SoundFile, ImageFile
+
+
+# This program requires LEGO EV3 MicroPython v2.0 or higher.
+# Click "Open user guide" on the EV3 extension tab for more information.
+
+
+# Create your objects here.
+ev3 = EV3Brick()
+
+
+# Write your program here.
+from pybricks.hubs import EV3Brick
+from pybricks.ev3devices import Motor, ColorSensor
+from pybricks.parameters import Port, Direction
+from pybricks.tools import wait
+
+
+ev3 = EV3Brick()
+
+
+# =========================
+# MOTORES
+# =========================
+
+motor_esquerdo = Motor(
+    Port.A,
+    positive_direction=Direction.CLOCKWISE
+)
+
+motor_direito = Motor(
+    Port.B,
+    positive_direction=Direction.CLOCKWISE
+)
+
+
+# =========================
+# SENSORES
+# =========================
+
+S1 = ColorSensor(Port.S1)  # DIREITA
+S2 = ColorSensor(Port.S2)  # ESQUERDA
+S3 = ColorSensor(Port.S3)  # CENTRO
+S4 = ColorSensor(Port.S4)  # MARCAÇÕES
+
+
+# =========================
+# CALIBRAÇÃO
+# =========================
+
+S1_PRETO = 9.5
+S1_BRANCO = 74.5
+
+S2_PRETO = 14
+S2_BRANCO = 100
+
+S3_PRETO = 15
+S3_BRANCO = 100
+
+S4_PRETO = 14
+S4_BRANCO = 100
+
+
+# =========================
+# PID / CONTROLE
+# =========================
+
+KP = 0.46
+KI = 0
+KD = 0.26
+
+
+
+# =========================
+# VELOCIDADES
+# =========================
+
+VELOCIDADE_RETA = 170
+VELOCIDADE_CURVA = 70
+
+velocidade_atual = 90
+
+
+# =========================
+# ESTADOS
+# =========================
+
+erro_anterior = 0
+derivada_filtrada = 0
+integral_filtrada = 0
+
+correcao_anterior = 0
+
+# -1 = esquerda
+#  1 = direita
+ultima_direcao = 0
+
+# Memória da curva
+curva_memoria = 0
+modo_reta = 0
+alinhado = 0
+
+
+# =========================
+# FUNÇÃO DE NORMALIZAÇÃO
+# =========================
+
+def normalizar(valor, preto, branco):
+
+    resultado = ((valor - preto) / (branco - preto)) * 100
+
+    if resultado < 0:
+        resultado = 0
+
+    if resultado > 100:
+        resultado = 100
+
+    return resultado
+
+
+# =========================
+# LOOP PRINCIPAL
+# =========================
+
+while True:
+
+    # -------------------------
+    # LEITURA DOS SENSORES
+    # -------------------------
+
+    r1 = S1.reflection()
+    r2 = S2.reflection()
+    r3 = S3.reflection()
+    r4 = S4.reflection()
+
+
+    # -------------------------
+    # NORMALIZAÇÃO
+    # -------------------------
+
+    s1 = normalizar(r1, S1_PRETO, S1_BRANCO)
+    s2 = normalizar(r2, S2_PRETO, S2_BRANCO)
+    s3 = normalizar(r3, S3_PRETO, S3_BRANCO)
+    s4 = normalizar(r4, S4_PRETO, S4_BRANCO)
+
+
+    # ==================================================
+    # 1. DESCOBRIR A POSIÇÃO DA LINHA
+    # ==================================================
+
+    soma = s1 + s2 + s3
+
+
+    if soma > 8:
+
+        # S2 = esquerda = negativo
+        # S3 = centro   = zero
+        # S1 = direita  = positivo
+
+        erro = ((s1 * 100) - (s2 * 100)) / soma
+
+
+    else:
+
+        # Linha perdida.
+        # NÃO zeramos o erro.
+        # Mantemos a direção anterior.
+
+        erro = erro_anterior
+
+
+    # ==================================================
+    # 2. MEMÓRIA DA DIREÇÃO DA CURVA
+    # ==================================================
+
+    # CURVA PARA ESQUERDA
+    if s2 > 45 and s2 > s1 + 10:
+
+        ultima_direcao = -1
+
+        # Aumenta rapidamente a memória
+        curva_memoria -= 1
+
+        if curva_memoria < -10:
+            curva_memoria = -10
+
+
+    # CURVA PARA DIREITA
+    elif s1 > 45 and s1 > s2 + 10:
+
+        ultima_direcao = 1
+
+        # Aumenta rapidamente a memória
+        curva_memoria += 1
+
+        if curva_memoria > 10:
+            curva_memoria = 10
+
+
+    else:
+
+        # Não estamos vendo claramente
+        # uma curva externa.
+        #
+        # A memória desaparece DEVAGAR.
+
+        if curva_memoria > 0:
+            curva_memoria -= 1.2
+
+            if curva_memoria < 0:
+                curva_memoria = 0
+
+        elif curva_memoria < 0:
+            curva_memoria += 1.2
+
+            if curva_memoria > 0:
+                curva_memoria = 0
+
+
+    # ==================================================
+    # 3. SE O CENTRO PEGOU A LINHA,
+    #    ESTABILIZA A CURVA
+    # ==================================================
+
+    if s3 > 75:
+
+        curva_memoria *= 0.30
+
+    # =========================
+    # MODO DE ESTABILIZAÇÃO
+    # =========================
+
+    if s3 > 70 and s1 < 45 and s2 < 45:
+
+        alinhado += 1
+
+    else:
+
+        alinhado = 0
+
+
+    # Se o S3 ficar centralizado por alguns ciclos,
+    # entendemos que o robô terminou a curva.
+
+    if alinhado >= 4:
+
+        modo_reta = 1
+
+        # Mata rapidamente o CAP
+        curva_memoria *= 0.25
+
+
+    else:
+
+        modo_reta = 0
+
+    # Ajuste extra para alinhar em linha reta.
+    # Se o centro estiver quase centralizado e ambos os lados estão baixos,
+    # damos uma correção pequena para manter a trajetória estável.
+    if s3 > 55 and s1 < 40 and s2 < 40:
+        erro = erro * 0.35
+
+
+    # ==================================================
+    # 4. DERIVADA + INTEGRAL
+    # ==================================================
+
+    derivada = erro - erro_anterior
+
+    # Integral pequena e filtrada para corrigir desvio lento sem exagerar.
+    integral_filtrada = (integral_filtrada * 0.80) + (erro * 0.20)
+
+    # Filtro LEVE apenas na derivada.
+    derivada_filtrada = (
+        derivada_filtrada * 0.65
+        + derivada * 0.35
+    )
+
+    erro_anterior = erro
+
+
+    # ==================================================
+    # 5. CORREÇÃO PRINCIPAL
+    # ==================================================
+
+    correcao_pid = (
+        KP * erro
+        + KI * integral_filtrada
+        + KD * derivada_filtrada
+    )
+
+
+    # ==================================================
+    # 6. MEMÓRIA DA CURVA
+    # ==================================================
+
+    correcao = correcao_pid + curva_memoria
+
+
+    # ==================================================
+    # ESTABILIZAÇÃO DA RETA
+    # ==================================================
+
+    if modo_reta == 1:
+
+        correcao *= 0.06
+
+    elif abs(erro) < 8:
+        correcao *= 0.18
+
+    elif abs(erro) < 22:
+        # Curva suave: aumentar levemente a resposta para acompanhar a velocidade maior.
+        correcao *= 0.35
+
+    else:
+        correcao *= 0.62
+
+
+    # ==================================================
+    # 7. LIMITAR A CORREÇÃO
+    # ==================================================
+
+    if correcao > 58:
+        correcao = 58
+
+    if correcao < -58:
+        correcao = -58
+
+
+    # ==================================================
+    # 8. NÃO DEIXAR A CORREÇÃO DAR UM "PULO"
+    # ==================================================
+
+    diferenca = correcao - correcao_anterior
+
+    if diferenca > 1.8:
+        correcao = correcao_anterior + 1.8
+
+    elif diferenca < -1.8:
+        correcao = correcao_anterior - 1.8
+
+    correcao_anterior = correcao
+
+
+    # ==================================================
+    # 9. VELOCIDADE
+    # ==================================================
+
+    intensidade_curva = abs(erro)
+
+
+    # Curva forte
+    if intensidade_curva > 65:
+
+        velocidade_alvo = 40
+
+
+    # Curva média
+    elif intensidade_curva > 40:
+
+        velocidade_alvo = 52
+
+
+    elif intensidade_curva > 25:
+
+        velocidade_alvo = 67
+
+
+    elif intensidade_curva > 12:
+
+        velocidade_alvo = 83
+
+
+    # Reta
+    else:
+
+        velocidade_alvo = 98
+
+
+    # Sensor externo detectando curva:
+    # reduz velocidade ANTES de entrar completamente nela.
+    # Mantém a velocidade, apenas reduz a correção na curva suave.
+    if s2 > 60 or s1 > 60:
+        correcao *= 0.75
+
+        if velocidade_alvo > 64:
+            velocidade_alvo = 64
+
+
+    # Marcações
+    if s4 > 65:
+
+        velocidade_alvo -= 5
+
+
+    # Linha perdida
+    if soma <= 8:
+
+        velocidade_alvo = 52
+
+
+    if velocidade_alvo < VELOCIDADE_CURVA:
+        velocidade_alvo = VELOCIDADE_CURVA
+
+    if velocidade_alvo > VELOCIDADE_RETA:
+        velocidade_alvo = VELOCIDADE_RETA
+
+
+    # ==================================================
+    # 10. ACELERAÇÃO / DESACELERAÇÃO
+    # ==================================================
+
+    if velocidade_atual < velocidade_alvo:
+
+        velocidade_atual += 3
+
+        if velocidade_atual > velocidade_alvo:
+            velocidade_atual = velocidade_alvo
+
+
+    else:
+
+        velocidade_atual -= 4
+
+        if velocidade_atual < velocidade_alvo:
+            velocidade_atual = velocidade_alvo
+
+
+    # ==================================================
+    # 11. MOTORES
+    # ==================================================
+
+    esquerda = velocidade_atual + correcao
+    direita = velocidade_atual - correcao
+
+
+    # Limites
+
+    if esquerda > 100:
+        esquerda = 100
+
+    if esquerda < -100:
+        esquerda = -100
+
+    if direita > 100:
+        direita = 100
+
+    if direita < -100:
+        direita = -100
+
+
+    # IMPORTANTE:
+    # No seu robô, negativo = andar para frente
+
+    motor_esquerdo.dc(-int(esquerda))
+    motor_direito.dc(-int(direita))
+
+
+    wait(1)
